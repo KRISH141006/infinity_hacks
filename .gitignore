@@ -1,0 +1,69 @@
+# =========================
+# macOS
+# =========================
+.DS_Store
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment / secrets
+.env
+.env.*
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
+
+# =========================
+# Build / distribution
+# =========================
+build/
+dist/
+
+# =========================
+# Large ML model files
+# Keep these outside Git
+# =========================
+*.pt
+*.pkl
+*.task
+*.onnx
+*.h5
+*.keras
+
+# =========================
+# Input videos / datasets
+# =========================
+input/
+*.mp4
+*.avi
+*.mov
+*.webm
+
+# =========================
+# Generated output
+# =========================
+output/
+
+# =========================
+# Training datasets
+# =========================
+*.csv
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
