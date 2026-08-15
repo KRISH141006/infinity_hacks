@@ -5,4 +5,7 @@ pandas
 streamlit
 altair
 ultralytics
+lapx
+scikit-learn
+joblib
 huggingface_hub

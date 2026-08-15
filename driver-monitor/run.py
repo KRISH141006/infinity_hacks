@@ -1,61 +1,48 @@
+#!/usr/bin/env python3
 import subprocess
 import os
 import sys
+import urllib.request
+
+def download_file_if_missing(url, target_path, description):
+    if not os.path.exists(target_path):
+        os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+        print(f"Downloading {description} to {target_path}...")
+        try:
+            urllib.request.urlretrieve(url, target_path)
+            print(f"✅ Successfully downloaded {description}.")
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to download {description} from {url}: {e}")
 
 def main():
-    print("==================================================")
-    # 1. Check if input video exists
-    input_video = "input/driver.mp4"
-    if not os.path.exists(input_video):
-        # Let's copy it from parent folder if it exists there
-        parent_video = "../input/driver.mp4"
-        if os.path.exists(parent_video):
-            print(f"Copying driver.mp4 from {parent_video} to {input_video}...")
-            os.makedirs("input", exist_ok=True)
-            import shutil
-            shutil.copy(parent_video, input_video)
-        else:
-            # Let's copy a clip instead if it exists
-            parent_clip = "../input/clip_1.mp4"
-            if os.path.exists(parent_clip):
-                print(f"Copying clip_1.mp4 to {input_video}...")
-                os.makedirs("input", exist_ok=True)
-                import shutil
-                shutil.copy(parent_clip, input_video)
-            else:
-                print(f"Error: Input video not found at '{input_video}'. Please place a video there.")
-                sys.exit(1)
+    print("=" * 60)
+    print("   🚗 RoadGuardian DMS & ADAS Safety Cockpit Launcher")
+    print("=" * 60)
 
-    # 2. Check if face landmarker model exists
+    # 1. Ensure models directory exists and download face_landmarker.task if missing
     face_task = "models/face_landmarker.task"
     if not os.path.exists(face_task):
         parent_task = "../models/face_landmarker.task"
         if os.path.exists(parent_task):
-            print(f"Copying face_landmarker.task from {parent_task} to {face_task}...")
+            print(f"Copying face_landmarker.task from parent directory...")
             os.makedirs("models", exist_ok=True)
             import shutil
             shutil.copy(parent_task, face_task)
         else:
-            print(f"Error: face_landmarker.task not found at '{face_task}'.")
-            sys.exit(1)
+            task_url = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task"
+            download_file_if_missing(task_url, face_task, "MediaPipe Face Landmarker Model")
 
-    # 3. Process video if output doesn't exist yet
-    processed_video = "output/processed_driver.mp4"
-    if not os.path.exists(processed_video):
-        print("Output video not found. Starting processing first...")
-        result = subprocess.run([sys.executable, "process_video.py"])
-        if result.returncode != 0:
-            print("Error occurred during video processing.")
-            sys.exit(1)
-    else:
-        print("Processed video already found. Skipping processing step (Use sidebar button in Streamlit to re-process).")
+    # 2. Check input and output directories
+    os.makedirs("input", exist_ok=True)
+    os.makedirs("output", exist_ok=True)
 
-    # 4. Start Streamlit Dashboard
-    print("\nLaunching Streamlit Dashboard...")
+    # 3. Launch Streamlit Dashboard
+    print("\n🚀 Launching Unified RoadGuardian Cockpit Dashboard...")
+    print("👉 Access the UI at: http://localhost:8501")
     try:
-        subprocess.run(["streamlit", "run", "dashboard.py"])
+        subprocess.run([sys.executable, "-m", "streamlit", "run", "dashboard.py"])
     except KeyboardInterrupt:
-        print("\nStopping Driver Monitoring System.")
+        print("\nStopping RoadGuardian Cockpit.")
 
 if __name__ == "__main__":
     main()
