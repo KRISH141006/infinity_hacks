@@ -7,6 +7,17 @@ import altair as alt
 import subprocess
 from datetime import datetime
 
+# Absolute directory of this dashboard script
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def resolve_path(path_str):
+    """Ensures relative paths are resolved against BASE_DIR regardless of launch cwd."""
+    if not path_str:
+        return path_str
+    if os.path.isabs(path_str):
+        return path_str
+    return os.path.normpath(os.path.join(BASE_DIR, path_str))
+
 st.set_page_config(
     page_title="RoadGuardian Cockpit - DMS & ADAS Intelligence",
     page_icon="🚗",
@@ -54,9 +65,10 @@ st.markdown('<div class="cockpit-sub">Driver Monitoring System (DMS) & Advanced 
 
 # Configuration options in sidebar
 st.sidebar.header("🔧 DMS Config (Internal Camera)")
-# Pick sensible default if tired_driver_processed.mp4 exists
-default_driver_in = "input/tired_driver.webm" if os.path.exists("input/tired_driver.webm") else "input/driver.mp4"
-default_driver_out = "output/tired_driver_processed.mp4" if os.path.exists("output/tired_driver_processed.mp4") else "output/processed_driver.mp4"
+
+# Pick sensible defaults
+default_driver_in = "input/tired_driver.webm" if os.path.exists(resolve_path("input/tired_driver.webm")) else "input/driver.mp4"
+default_driver_out = "output/tired_driver_processed.mp4" if os.path.exists(resolve_path("output/tired_driver_processed.mp4")) else "output/processed_driver.mp4"
 
 input_video_path = st.sidebar.text_input("Internal Input Video", default_driver_in)
 processed_video_path = st.sidebar.text_input("Internal Processed Video", default_driver_out)
@@ -64,17 +76,18 @@ telemetry_path = st.sidebar.text_input("Driver Telemetry JSON", "output/telemetr
 
 if st.sidebar.button("👤 Process Driver DMS Video"):
     with st.spinner("Processing driver monitoring video..."):
+        script_path = os.path.join(BASE_DIR, "process_video.py")
         result = subprocess.run([
-            sys.executable, "process_video.py", 
-            "--input", input_video_path,
-            "--output", processed_video_path,
-            "--telemetry", telemetry_path
-        ], capture_output=True, text=True)
+            sys.executable, script_path, 
+            "--input", resolve_path(input_video_path),
+            "--output", resolve_path(processed_video_path),
+            "--telemetry", resolve_path(telemetry_path)
+        ], cwd=BASE_DIR, capture_output=True, text=True)
         if result.returncode == 0:
             st.sidebar.success("Driver DMS video processed successfully!")
             st.rerun()
         else:
-            st.sidebar.error(f"Error processing driver video: {result.stderr}")
+            st.sidebar.error(f"Error processing driver video: {result.stderr or result.stdout}")
 
 st.sidebar.markdown("---")
 st.sidebar.header("🛣️ ADAS Config (External Camera)")
@@ -84,29 +97,35 @@ road_telemetry_path = st.sidebar.text_input("Road Telemetry JSON", "output/road_
 
 if st.sidebar.button("🛣️ Process Road ADAS Video"):
     with st.spinner("Processing external camera labeled video & tracking..."):
+        script_path = os.path.join(BASE_DIR, "process_road_video.py")
         result = subprocess.run([
-            sys.executable, "process_road_video.py",
-            "--input", input_road_path,
-            "--output", processed_road_path,
-            "--telemetry", road_telemetry_path
-        ], capture_output=True, text=True)
+            sys.executable, script_path,
+            "--input", resolve_path(input_road_path),
+            "--output", resolve_path(processed_road_path),
+            "--telemetry", resolve_path(road_telemetry_path)
+        ], cwd=BASE_DIR, capture_output=True, text=True)
         if result.returncode == 0:
             st.sidebar.success("External road video labeled & processed successfully!")
             st.rerun()
         else:
-            st.sidebar.error(f"Error processing road video: {result.stderr}")
+            st.sidebar.error(f"Error processing road video: {result.stderr or result.stdout}")
 
-# Check files availability
-has_driver_video = os.path.exists(processed_video_path)
-has_driver_telemetry = os.path.exists(telemetry_path)
-has_road_video = os.path.exists(processed_road_path)
-has_road_telemetry = os.path.exists(road_telemetry_path)
+# Check files availability using absolute resolved paths
+abs_driver_video = resolve_path(processed_video_path)
+abs_driver_telemetry = resolve_path(telemetry_path)
+abs_road_video = resolve_path(processed_road_path)
+abs_road_telemetry = resolve_path(road_telemetry_path)
+
+has_driver_video = os.path.exists(abs_driver_video)
+has_driver_telemetry = os.path.exists(abs_driver_telemetry)
+has_road_video = os.path.exists(abs_road_video)
+has_road_telemetry = os.path.exists(abs_road_telemetry)
 
 # Load Driver Telemetry
 driver_telemetry = None
 if has_driver_telemetry:
     try:
-        with open(telemetry_path, "r") as f:
+        with open(abs_driver_telemetry, "r") as f:
             driver_telemetry = json.load(f)
     except Exception as e:
         st.error(f"Error loading driver telemetry: {e}")
@@ -115,7 +134,7 @@ if has_driver_telemetry:
 road_telemetry = None
 if has_road_telemetry:
     try:
-        with open(road_telemetry_path, "r") as f:
+        with open(abs_road_telemetry, "r") as f:
             road_telemetry = json.load(f)
     except Exception as e:
         st.error(f"Error loading road telemetry: {e}")
@@ -169,14 +188,14 @@ if max_time > 0.0:
     with col_cam1:
         st.markdown("#### 📹 Internal Camera (Driver Monitoring System)")
         if has_driver_video:
-            st.video(processed_video_path)
+            st.video(abs_driver_video)
         else:
             st.warning("Processed driver video not found. Run processing in the sidebar.")
             
     with col_cam2:
         st.markdown("#### 🛣️ External Camera (Road Perception - Driver's POV)")
         if has_road_video:
-            st.video(processed_road_path)
+            st.video(abs_road_video)
         else:
             st.info("Processed labeled road video will appear here once processed.")
             st.markdown(f"""
@@ -238,7 +257,7 @@ if max_time > 0.0:
                 alert_logs.append(f"[{t_str}] ✅ {k} RESOLVED (Active since {start_t})")
 
     # Also include Road Events if present
-    road_events_path = "output/road_events.json"
+    road_events_path = resolve_path("output/road_events.json")
     if os.path.exists(road_events_path):
         try:
             with open(road_events_path, "r") as rf:
@@ -295,8 +314,8 @@ if max_time > 0.0:
     
     with col_bb:
         st.markdown("#### 🔒 Incident Data Recorder (EDR)")
-        blackbox_csv_path = "output/roadguardian_blackbox_event.csv"
-        incident_summary_path = "output/roadguardian_incident_summary.json"
+        blackbox_csv_path = resolve_path("output/roadguardian_blackbox_event.csv")
+        incident_summary_path = resolve_path("output/roadguardian_incident_summary.json")
         
         if os.path.exists(blackbox_csv_path) and os.path.exists(incident_summary_path):
             with open(incident_summary_path, "r") as f:
@@ -313,13 +332,13 @@ if max_time > 0.0:
 
     with col_wit:
         st.markdown("#### 🛰️ Connected Vehicle Witness Discovery")
-        # Check for accident report json files
-        output_files = os.listdir("output") if os.path.exists("output") else []
+        output_dir = resolve_path("output")
+        output_files = os.listdir(output_dir) if os.path.exists(output_dir) else []
         accident_reports = [f for f in output_files if f.startswith("accident_report_") and f.endswith(".json")]
         
         if accident_reports:
             latest_report = sorted(accident_reports)[-1]
-            with open(os.path.join("output", latest_report), "r") as f:
+            with open(os.path.join(output_dir, latest_report), "r") as f:
                 rep = json.load(f)
             st.success(f"📍 Geofence Witness Discovery Report (`{latest_report}`)")
             st.json(rep.get("witness_discovery", {}))
