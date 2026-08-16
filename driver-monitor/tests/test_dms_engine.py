@@ -2,8 +2,19 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
-from src.drowsiness import DrowsinessDetector
-from src.attention import AttentionManager
+
+from src.dms import (
+    FaceTracker,
+    EyeEngine,
+    GazeEngine,
+    HeadPoseEngine,
+    YawnEngine,
+    FatigueEngine,
+    DistractionEngine,
+    DrowsinessEngine,
+    PhoneEngine,
+    FusionEngine
+)
 
 class MockLandmark:
     def __init__(self, x, y, z=0.0):
@@ -11,243 +22,247 @@ class MockLandmark:
         self.y = y
         self.z = z
 
-def create_mock_landmarks(ear=0.30, mar=0.15):
-    """Creates a mock 478 MediaPipe landmark structure with specified EAR and MAR."""
-    landmarks = [MockLandmark(0.5, 0.5) for _ in range(478)]
+def make_landmarks(ear=0.30, mar=0.15, gaze_offset=0.0, yaw=0.0, pitch=0.0):
+    """Synthesizes realistic 478 MediaPipe face landmarks."""
+    lms = [MockLandmark(0.5, 0.5) for _ in range(478)]
 
-    # Left eye: 33 (outer), 160 (top1), 158 (top2), 133 (inner), 153 (bot2), 144 (bot1)
-    # Horizontal width = 0.10
-    landmarks[33] = MockLandmark(0.40, 0.40)
-    landmarks[133] = MockLandmark(0.50, 0.40)
-    # Height = ear * width
+    # Left eye: corners 33, 133
+    lms[33] = MockLandmark(0.40, 0.40)
+    lms[133] = MockLandmark(0.50, 0.40)
     h = ear * 0.10
-    landmarks[160] = MockLandmark(0.43, 0.40 - h/2)
-    landmarks[158] = MockLandmark(0.47, 0.40 - h/2)
-    landmarks[144] = MockLandmark(0.43, 0.40 + h/2)
-    landmarks[153] = MockLandmark(0.47, 0.40 + h/2)
+    lms[160] = MockLandmark(0.43, 0.40 - h/2)
+    lms[158] = MockLandmark(0.47, 0.40 - h/2)
+    lms[144] = MockLandmark(0.43, 0.40 + h/2)
+    lms[153] = MockLandmark(0.47, 0.40 + h/2)
 
-    # Right eye: 362 (inner), 385 (top1), 387 (top2), 263 (outer), 373 (bot2), 380 (bot1)
-    landmarks[362] = MockLandmark(0.55, 0.40)
-    landmarks[263] = MockLandmark(0.65, 0.40)
-    landmarks[385] = MockLandmark(0.58, 0.40 - h/2)
-    landmarks[387] = MockLandmark(0.62, 0.40 - h/2)
-    landmarks[380] = MockLandmark(0.58, 0.40 + h/2)
-    landmarks[373] = MockLandmark(0.62, 0.40 + h/2)
+    # Right eye: corners 362, 263
+    lms[362] = MockLandmark(0.55, 0.40)
+    lms[263] = MockLandmark(0.65, 0.40)
+    lms[385] = MockLandmark(0.58, 0.40 - h/2)
+    lms[387] = MockLandmark(0.62, 0.40 - h/2)
+    lms[380] = MockLandmark(0.58, 0.40 + h/2)
+    lms[373] = MockLandmark(0.62, 0.40 + h/2)
 
-    # Irises
-    landmarks[468] = MockLandmark(0.45, 0.40) # Left iris center
-    landmarks[473] = MockLandmark(0.60, 0.40) # Right iris center
+    # Irises with gaze offset (left/right/center)
+    lms[468] = MockLandmark(0.45 + gaze_offset, 0.40)
+    lms[473] = MockLandmark(0.60 + gaze_offset, 0.40)
 
     # Mouth: top 13, bottom 14, left 61, right 291
-    # width = 0.12
-    landmarks[61] = MockLandmark(0.44, 0.70)
-    landmarks[291] = MockLandmark(0.56, 0.70)
+    lms[61] = MockLandmark(0.44, 0.70)
+    lms[291] = MockLandmark(0.56, 0.70)
     mh = mar * 0.12
-    landmarks[13] = MockLandmark(0.50, 0.70 - mh/2)
-    landmarks[14] = MockLandmark(0.50, 0.70 + mh/2)
+    lms[13] = MockLandmark(0.50, 0.70 - mh/2)
+    lms[14] = MockLandmark(0.50, 0.70 + mh/2)
 
-    return landmarks
+    # PnP Feature landmarks: Nose (1), Chin (152)
+    lms[1] = MockLandmark(0.50, 0.50)
+    lms[152] = MockLandmark(0.50, 0.85)
 
-def test_1_normal_forward_driving():
-    """Test 1: Normal forward driving -> Drowsiness LOW, Distraction LOW."""
-    drowsy = DrowsinessDetector(use_yolo=False)
-    attention = AttentionManager()
-    fps = 30
+    return lms
 
-    landmarks = create_mock_landmarks(ear=0.30, mar=0.15)
-    head_pose = (0.0, 0.0, 0.0, "FORWARD")
-    gaze = ("CENTER", 0.95)
-    phone = (False, 0.0)
+class FullDMSTestRig:
+    def __init__(self):
+        self.face = FaceTracker()
+        self.eye = EyeEngine()
+        self.gaze = GazeEngine()
+        self.head = HeadPoseEngine()
+        self.yawn = YawnEngine()
+        self.fatigue = FatigueEngine()
+        self.distract = DistractionEngine()
+        self.drowsy = DrowsinessEngine(use_yolo=False)
+        self.phone = PhoneEngine()
+        self.fusion = FusionEngine()
+        self.t = 0.0
 
-    for f in range(60): # 2 seconds
-        d_res = drowsy.process_frame(landmarks, None, fps, f, relative_pitch=0.0, head_forward=True)
-        a_res = attention.compute_scores(d_res, head_pose, gaze, phone, fps)
+    def step(self, lms, dt=0.033, phone_det=False, phone_conf=0.0, custom_head=None, custom_gaze=None):
+        self.t += dt
+        face_d = self.face.update(lms, (720, 1280), dt)
+        yawn_d = self.yawn.process(lms, dt, self.t)
+        eye_d = self.eye.process(lms, dt, self.t, is_stable_upright=True, mar=yawn_d["mar"], tracking_reliable=face_d["is_confident"])
+        
+        if custom_head:
+            head_d = custom_head
+        else:
+            head_d = self.head.process(lms, (720, 1280), dt, is_eye_open=not eye_d["is_eye_closed"], is_eye_closed=eye_d["is_eye_closed"])
 
-    assert d_res["drowsiness_score"] < 25, f"Expected low drowsiness, got {d_res['drowsiness_score']}"
-    assert a_res["distraction_score"] < 20, f"Expected low distraction, got {a_res['distraction_score']}"
-    assert a_res["attention_score"] > 80, f"Expected high attention, got {a_res['attention_score']}"
+        if custom_gaze:
+            gaze_d = custom_gaze
+        else:
+            gaze_d = self.gaze.process(lms, is_eye_open=not eye_d["is_eye_closed"], is_stable_upright=head_d["is_head_forward"], tracking_reliable=face_d["is_confident"])
 
-def test_2_normal_blinking():
-    """Test 2: Normal blinking (<0.35s) -> No drowsiness alert."""
-    drowsy = DrowsinessDetector(use_yolo=False)
-    attention = AttentionManager()
-    fps = 30
+        fatigue_d = self.fatigue.process(eye_d["is_eye_closed"], yawn_d, eye_d, dt)
+        drowsy_d = self.drowsy.process(eye_d, head_d, fatigue_d, yawn_d, yolo_drowsy_prob=0.0, dt=dt)
+        phone_d = self.phone.process(phone_det, phone_conf, dt)
+        distract_d = self.distract.process(gaze_d, head_d, eye_d, drowsy_d, face_d, dt)
 
-    open_lm = create_mock_landmarks(ear=0.30)
-    closed_lm = create_mock_landmarks(ear=0.10)
+        record, events = self.fusion.process(
+            self.t, face_d, eye_d, gaze_d, head_d, yawn_d, fatigue_d, distract_d, drowsy_d, phone_d
+        )
+        return record
 
-    # 1. Calibrate open eyes for 1 sec
-    for f in range(30):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("CENTER", 0.95), (False, 0.0), fps)
+def test_A_normal_forward_driver():
+    rig = FullDMSTestRig()
+    lms = make_landmarks(ear=0.30, mar=0.15)
+    for _ in range(60): # 2 seconds
+        rec = rig.step(lms)
+    assert rec["drowsiness_score"] < 25, f"Expected low drowsiness, got {rec['drowsiness_score']}"
+    assert rec["distraction_score"] < 20, f"Expected low distraction, got {rec['distraction_score']}"
+    assert rec["attention_score"] >= 80, f"Expected high attention, got {rec['attention_score']}"
+    assert rec["master_driver_state"] == "ALERT"
 
-    # 2. Blink for 6 frames (0.2 seconds)
-    for f in range(30, 36):
-        d_res = drowsy.process_frame(closed_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        a_res = attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("UNKNOWN", 0.0), (False, 0.0), fps)
+def test_B_normal_blinking():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30)
+    closed_lms = make_landmarks(ear=0.08)
+    for _ in range(30): rig.step(open_lms) # calibrate
+    for _ in range(6): rig.step(closed_lms) # 0.2s blink
+    for _ in range(30): rec = rig.step(open_lms) # reopen
+    assert rec["drowsiness_score"] < 35, f"Normal blink should not trigger drowsiness: {rec['drowsiness_score']}"
+    assert not any("DROWSINESS" in a for a in rec["alerts"])
 
-    # 3. Eyes reopen
-    for f in range(36, 60):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        a_res = attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("CENTER", 0.95), (False, 0.0), fps)
+def test_C_long_blink():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30)
+    closed_lms = make_landmarks(ear=0.08)
+    for _ in range(30): rig.step(open_lms)
+    for _ in range(18): rec = rig.step(closed_lms) # 0.6s long blink
+    assert 30 <= rec["drowsiness_score"] <= 65, f"Expected moderate long-blink fatigue, got {rec['drowsiness_score']}"
 
-    assert d_res["drowsiness_score"] < 35, f"Normal blink should not produce high drowsiness score: {d_res['drowsiness_score']}"
-    assert not any("DROWSINESS" in alert for alert in a_res["alerts"]), "Normal blink should not trigger drowsiness alert"
+def test_D_microsleep():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30)
+    closed_lms = make_landmarks(ear=0.08)
+    for _ in range(30): rig.step(open_lms)
+    for _ in range(55): rec = rig.step(closed_lms) # 1.82s closure
+    assert rec["drowsiness_score"] >= 85, f"Expected high drowsiness >= 85 for 1.8s sleep, got {rec['drowsiness_score']}"
+    assert rec["master_driver_state"] in ["DROWSY", "DROWSY_NODDING"]
+    assert rec["distraction_score"] <= 15, "Distraction MUST be low during sleep"
 
-def test_3_prolonged_eye_closure():
-    """Test 3: Prolonged eye closure for 1.5–2.0 sec -> Drowsiness HIGH."""
-    drowsy = DrowsinessDetector(use_yolo=False)
-    attention = AttentionManager()
-    fps = 30
+def test_E_sleeping_and_nodding():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30)
+    closed_lms = make_landmarks(ear=0.08)
+    for _ in range(30): rig.step(open_lms)
+    # Pitch drops downward while eyes close
+    custom_nod_head = {
+        "raw_yaw": 0.0, "raw_pitch": -22.0, "raw_roll": 0.0,
+        "neutral_yaw": 0.0, "neutral_pitch": 0.0, "neutral_roll": 0.0,
+        "relative_yaw": 0.0, "relative_pitch": -22.0, "relative_roll": 0.0,
+        "head_pose_state": "DOWN", "pitch_velocity": -25.0, "pitch_acceleration": 0.0,
+        "yaw_velocity": 0.0, "is_nodding_off": True, "is_head_forward": False, "is_extreme_pose": False
+    }
+    for _ in range(55): rec = rig.step(closed_lms, custom_head=custom_nod_head)
+    assert rec["drowsiness_score"] >= 90, f"Expected critical drowsiness >= 90, got {rec['drowsiness_score']}"
+    assert rec["master_driver_state"] == "DROWSY_NODDING"
+    assert rec["distraction_score"] <= 15, "MUST NOT classify head drop as distraction!"
+    assert any("DROWSY NODDING" in a for a in rec["alerts"])
 
-    open_lm = create_mock_landmarks(ear=0.30)
-    closed_lm = create_mock_landmarks(ear=0.08)
+def test_F_yawning_event():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30, mar=0.15)
+    yawn_lms = make_landmarks(ear=0.30, mar=0.55)
+    for _ in range(30): rig.step(open_lms)
+    for _ in range(45): rec = rig.step(yawn_lms) # 1.5s yawn
+    assert rec["is_yawning"] or rec["yawn_probability"] >= 0.60
+    assert rec["fatigue_score"] > 0, "Yawning should increase fatigue evidence"
 
-    # Calibrate open eyes
-    for f in range(30):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("CENTER", 0.95), (False, 0.0), fps)
+def test_G_looking_left_3s():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30, gaze_offset=-0.08) # gaze left
+    custom_left_head = {
+        "raw_yaw": -30.0, "raw_pitch": 0.0, "raw_roll": 0.0,
+        "neutral_yaw": 0.0, "neutral_pitch": 0.0, "neutral_roll": 0.0,
+        "relative_yaw": -30.0, "relative_pitch": 0.0, "relative_roll": 0.0,
+        "head_pose_state": "LEFT", "pitch_velocity": 0.0, "pitch_acceleration": 0.0,
+        "yaw_velocity": 0.0, "is_nodding_off": False, "is_head_forward": False, "is_extreme_pose": False
+    }
+    for _ in range(30): rig.step(open_lms)
+    for _ in range(90): rec = rig.step(open_lms, custom_head=custom_left_head) # 3s
+    assert rec["distraction_score"] >= 80, f"Expected high distraction >= 80, got {rec['distraction_score']}"
+    assert rec["master_driver_state"] == "DISTRACTED"
+    assert rec["drowsiness_score"] < 25, "Drowsiness must remain low when looking left awake"
 
-    # Close eyes for 50 frames (1.67 seconds)
-    for f in range(30, 80):
-        d_res = drowsy.process_frame(closed_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        a_res = attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("UNKNOWN", 0.0), (False, 0.0), fps)
+def test_H_looking_right_3s():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30, gaze_offset=+0.08) # gaze right
+    custom_right_head = {
+        "raw_yaw": 30.0, "raw_pitch": 0.0, "raw_roll": 0.0,
+        "neutral_yaw": 0.0, "neutral_pitch": 0.0, "neutral_roll": 0.0,
+        "relative_yaw": 30.0, "relative_pitch": 0.0, "relative_roll": 0.0,
+        "head_pose_state": "RIGHT", "pitch_velocity": 0.0, "pitch_acceleration": 0.0,
+        "yaw_velocity": 0.0, "is_nodding_off": False, "is_head_forward": False, "is_extreme_pose": False
+    }
+    for _ in range(30): rig.step(open_lms)
+    for _ in range(90): rec = rig.step(open_lms, custom_head=custom_right_head) # 3s
+    assert rec["distraction_score"] >= 80, f"Expected high distraction >= 80, got {rec['distraction_score']}"
+    assert rec["master_driver_state"] == "DISTRACTED"
 
-    assert d_res["drowsiness_score"] >= 80, f"Expected high drowsiness score >= 80, got {d_res['drowsiness_score']}"
-    assert d_res["drowsiness_state"] in ["DROWSY", "DROWSY_NODDING"], f"Expected DROWSY state, got {d_res['drowsiness_state']}"
-    assert any("DROWSINESS" in alert for alert in a_res["alerts"]), "Expected Drowsiness alert to be active"
+def test_I_looking_down_awake():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30, mar=0.15)
+    custom_down_head = {
+        "raw_yaw": 0.0, "raw_pitch": -25.0, "raw_roll": 0.0,
+        "neutral_yaw": 0.0, "neutral_pitch": 0.0, "neutral_roll": 0.0,
+        "relative_yaw": 0.0, "relative_pitch": -25.0, "relative_roll": 0.0,
+        "head_pose_state": "DOWN", "pitch_velocity": 0.0, "pitch_acceleration": 0.0,
+        "yaw_velocity": 0.0, "is_nodding_off": False, "is_head_forward": False, "is_extreme_pose": False
+    }
+    for _ in range(30): rig.step(open_lms)
+    for _ in range(70): rec = rig.step(open_lms, custom_head=custom_down_head)
+    assert rec["drowsiness_score"] < 40, f"Awake looking down must not equal microsleep, got {rec['drowsiness_score']}"
 
-def test_4_eye_closure_plus_head_drop():
-    """Test 4: Eye closure + downward head drop -> DROWSY_NODDING / DROWSINESS HIGH, NOT DRIVER DISTRACTED."""
-    drowsy = DrowsinessDetector(use_yolo=False)
-    attention = AttentionManager()
-    fps = 30
+def test_J_phone_usage():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30)
+    for _ in range(30): rig.step(open_lms)
+    for _ in range(25): rec = rig.step(open_lms, phone_det=True, phone_conf=0.90)
+    assert rec["phone_usage"] is True
+    assert any("PHONE" in a for a in rec["alerts"])
 
-    open_lm = create_mock_landmarks(ear=0.30)
-    closed_lm = create_mock_landmarks(ear=0.08)
+def test_K_temporary_landmark_loss():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30)
+    closed_lms = make_landmarks(ear=0.08)
+    for _ in range(30): rig.step(open_lms)
+    for _ in range(40): rec = rig.step(closed_lms)
+    score_before = rec["drowsiness_score"]
+    # Drop landmarks for 5 frames
+    for _ in range(5): rec = rig.step(None)
+    assert rec["drowsiness_score"] >= score_before - 5, "Drowsiness MUST NOT reset to zero on landmark loss!"
 
-    # Calibrate open eyes
-    for f in range(30):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("CENTER", 0.95), (False, 0.0), fps)
-
-    # Eyes closed + head pitch dropping to -25 degrees for 1.8s
-    for f in range(30, 85):
-        d_res = drowsy.process_frame(closed_lm, None, fps, f, relative_pitch=-25.0, head_forward=False)
-        a_res = attention.compute_scores(d_res, (0.0, -25.0, 0.0, "DOWN"), ("UNKNOWN", 0.0), (False, 0.0), fps)
-
-    assert d_res["drowsiness_score"] >= 90, f"Expected critical drowsiness >= 90, got {d_res['drowsiness_score']}"
-    assert d_res["drowsiness_state"] == "DROWSY_NODDING", f"Expected DROWSY_NODDING, got {d_res['drowsiness_state']}"
-    assert a_res["distraction_score"] <= 20, f"Head-drop during sleep MUST NOT be scored as distraction! Got {a_res['distraction_score']}"
-    assert not any("DISTRACTED" in alert for alert in a_res["alerts"]), "Must NOT trigger driver distraction alert during drowsy nodding"
-
-def test_5_looking_right_eyes_open_3s():
-    """Test 5: Looking right with eyes open for 3 seconds -> Distraction HIGH."""
-    drowsy = DrowsinessDetector(use_yolo=False)
-    attention = AttentionManager()
-    fps = 30
-
-    open_lm = create_mock_landmarks(ear=0.30)
-
-    # Calibrate
-    for f in range(30):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("CENTER", 0.95), (False, 0.0), fps)
-
-    # Look right for 90 frames (3 seconds) with eyes open
-    for f in range(30, 120):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=False)
-        a_res = attention.compute_scores(d_res, (35.0, 0.0, 0.0, "RIGHT"), ("RIGHT", 0.90), (False, 0.0), fps)
-
-    assert a_res["distraction_score"] >= 80, f"Expected high distraction score >= 80, got {a_res['distraction_score']}"
-    assert a_res["distraction_state"] == "DISTRACTED", f"Expected DISTRACTED state, got {a_res['distraction_state']}"
-    assert any("DISTRACTED" in alert for alert in a_res["alerts"]), "Expected Distraction alert"
-    assert d_res["drowsiness_score"] < 25, "Drowsiness should remain low"
-
-def test_6_brief_glance_right_0_3s():
-    """Test 6: Brief glance right for only 0.3s -> No major distraction alert."""
-    drowsy = DrowsinessDetector(use_yolo=False)
-    attention = AttentionManager()
-    fps = 30
-
-    open_lm = create_mock_landmarks(ear=0.30)
-
-    # Calibrate
-    for f in range(30):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("CENTER", 0.95), (False, 0.0), fps)
-
-    # Glance right for 9 frames (0.3s)
-    for f in range(30, 39):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=False)
-        a_res = attention.compute_scores(d_res, (25.0, 0.0, 0.0, "RIGHT"), ("RIGHT", 0.85), (False, 0.0), fps)
-
-    assert a_res["distraction_score"] < 50, f"Brief glance should not produce high distraction: {a_res['distraction_score']}"
-    assert not any("DISTRACTED" in alert for alert in a_res["alerts"]), "Brief glance should not trigger distraction alert"
-
-def test_7_gaze_center_with_moderate_head_offset():
-    """Test 7: Gaze center with moderate head offset -> Distraction LOW."""
-    drowsy = DrowsinessDetector(use_yolo=False)
-    attention = AttentionManager()
-    fps = 30
-
-    open_lm = create_mock_landmarks(ear=0.30)
-
-    # Calibrate
-    for f in range(30):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("CENTER", 0.95), (False, 0.0), fps)
-
-    # Head yaw at 24 deg (moderate turn) but gaze firmly CENTER at road
-    for f in range(30, 90): # 2 seconds
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=False)
-        a_res = attention.compute_scores(d_res, (24.0, 0.0, 0.0, "RIGHT"), ("CENTER", 0.95), (False, 0.0), fps)
-
-    assert a_res["distraction_score"] <= 20, f"Gaze center on road must keep distraction low: {a_res['distraction_score']}"
-    assert not any("DISTRACTED" in alert for alert in a_res["alerts"]), "Should not alert distraction when gaze is center"
-
-def test_8_temporary_landmark_loss_during_drowsiness():
-    """Test 8: Temporary landmark loss (<300ms) during drowsiness -> Do not reset drowsiness to zero."""
-    drowsy = DrowsinessDetector(use_yolo=False)
-    attention = AttentionManager()
-    fps = 30
-
-    open_lm = create_mock_landmarks(ear=0.30)
-    closed_lm = create_mock_landmarks(ear=0.08)
-
-    # Calibrate
-    for f in range(30):
-        d_res = drowsy.process_frame(open_lm, None, fps, f, relative_pitch=0.0, head_forward=True)
-        attention.compute_scores(d_res, (0.0, 0.0, 0.0, "FORWARD"), ("CENTER", 0.95), (False, 0.0), fps)
-
-    # Eyes closed for 1.2s -> DROWSY_CANDIDATE
-    for f in range(30, 66):
-        d_res = drowsy.process_frame(closed_lm, None, fps, f, relative_pitch=-10.0, head_forward=True)
-        attention.compute_scores(d_res, (0.0, -10.0, 0.0, "FORWARD"), ("UNKNOWN", 0.0), (False, 0.0), fps)
-
-    score_before_loss = d_res["drowsiness_score"]
-    assert score_before_loss > 50, f"Score before loss should be elevated, got {score_before_loss}"
-
-    # Missing landmarks for 5 frames (~160ms < 300ms)
-    for f in range(66, 71):
-        d_res = drowsy.process_frame(None, None, fps, f, relative_pitch=-10.0, head_forward=True)
-        attention.compute_scores(d_res, (0.0, -10.0, 0.0, "FORWARD"), ("UNKNOWN", 0.0), (False, 0.0), fps)
-
-    assert d_res["drowsiness_score"] > 50, f"Drowsiness score MUST NOT reset to 0 on brief landmark loss! Got {d_res['drowsiness_score']}"
-    assert d_res["drowsiness_state"] in ["DROWSY_CANDIDATE", "DROWSY", "DROWSY_NODDING"], f"State should not reset, got {d_res['drowsiness_state']}"
+def test_L_camera_offset_with_gaze_center():
+    rig = FullDMSTestRig()
+    open_lms = make_landmarks(ear=0.30, gaze_offset=0.0) # gaze firmly forward
+    custom_cam_offset_head = {
+        "raw_yaw": 24.0, "raw_pitch": 8.0, "raw_roll": 0.0,
+        "neutral_yaw": 0.0, "neutral_pitch": 0.0, "neutral_roll": 0.0,
+        "relative_yaw": 24.0, "relative_pitch": 8.0, "relative_roll": 0.0,
+        "head_pose_state": "RIGHT", "pitch_velocity": 0.0, "pitch_acceleration": 0.0,
+        "yaw_velocity": 0.0, "is_nodding_off": False, "is_head_forward": False, "is_extreme_pose": False
+    }
+    for _ in range(30): rig.step(open_lms)
+    for _ in range(60): rec = rig.step(open_lms, custom_head=custom_cam_offset_head)
+    assert rec["distraction_score"] <= 20, f"Gaze center with camera angle MUST NOT produce high distraction: {rec['distraction_score']}"
+    assert rec["master_driver_state"] == "ALERT"
 
 if __name__ == "__main__":
     tests = [
-        test_1_normal_forward_driving,
-        test_2_normal_blinking,
-        test_3_prolonged_eye_closure,
-        test_4_eye_closure_plus_head_drop,
-        test_5_looking_right_eyes_open_3s,
-        test_6_brief_glance_right_0_3s,
-        test_7_gaze_center_with_moderate_head_offset,
-        test_8_temporary_landmark_loss_during_drowsiness,
+        test_A_normal_forward_driver,
+        test_B_normal_blinking,
+        test_C_long_blink,
+        test_D_microsleep,
+        test_E_sleeping_and_nodding,
+        test_F_yawning_event,
+        test_G_looking_left_3s,
+        test_H_looking_right_3s,
+        test_I_looking_down_awake,
+        test_J_phone_usage,
+        test_K_temporary_landmark_loss,
+        test_L_camera_offset_with_gaze_center,
     ]
-    print("Running DMS Engine Test Suite...")
+    print("=" * 60)
+    print("   🧪 DMS MULTI-SIGNAL ENGINE COMPREHENSIVE VALIDATION")
+    print("=" * 60)
     passed = 0
     for t in tests:
         try:
@@ -256,7 +271,6 @@ if __name__ == "__main__":
             passed += 1
         except Exception as e:
             print(f"  ❌ {t.__name__} FAILED: {e}")
-    print(f"\nResult: {passed}/{len(tests)} tests passed.")
+    print(f"\nResults: {passed}/{len(tests)} tests passed.")
     if passed != len(tests):
         exit(1)
-

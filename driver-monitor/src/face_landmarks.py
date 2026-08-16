@@ -15,8 +15,14 @@ class FaceLandmarkerHelper:
             num_faces=1
         )
         self.landmarker = vision.FaceLandmarker.create_from_options(options)
+        self.last_timestamp_ms = -1
 
     def process_frame(self, frame, timestamp_ms):
+        # Guarantee strictly monotonically increasing timestamp for MediaPipe Video mode
+        if timestamp_ms <= self.last_timestamp_ms:
+            timestamp_ms = self.last_timestamp_ms + 1
+        self.last_timestamp_ms = timestamp_ms
+
         # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         mp_image = mp.Image(
@@ -29,4 +35,7 @@ class FaceLandmarkerHelper:
         return None
 
     def close(self):
-        self.landmarker.close()
+        try:
+            self.landmarker.close()
+        except Exception:
+            pass
